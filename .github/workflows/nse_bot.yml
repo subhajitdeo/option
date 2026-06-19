@@ -3,8 +3,6 @@ name: NSE Option Chain Bot
 on:
   push:
     branches: [ "main" ]
-  schedule:
-    - cron: "*/15 * * * *"
   workflow_dispatch:
 
 jobs:
