@@ -1,1 +1,23 @@
-
+{
+  "spot": 24013.1,
+  "atm": 24000,
+  "ce_peak": {
+    "strike": 24000,
+    "oi": 139329
+  },
+  "pe_peak": {
+    "strike": 24000,
+    "oi": 145104
+  },
+  "sentiment": "RISKY",
+  "trades": {
+    "BUY_PE_EXTREME": {
+      "entry": 24010,
+      "sl": 23990
+    },
+    "BUY_CE_EXTREME": {
+      "entry": 23990,
+      "sl": 24010
+    }
+  }
+}
