@@ -1,123 +1,169 @@
 import json
 
-FILE_PATH = "data/nifty_option_chain.json"
+INPUT_FILE = "data/nifty_option_chain.json"
 
 
-# -----------------------------
-# LOAD DATA (FIXED PATH)
-# -----------------------------
+# ----------------------------
+# LOAD DATA
+# ----------------------------
 def load_data():
-    with open(FILE_PATH, "r") as f:
+    with open(INPUT_FILE, "r") as f:
         raw = json.load(f)
 
     return raw["data"]["records"]["data"]
 
 
-# -----------------------------
-# NORMALIZE DATA
-# -----------------------------
-def normalize(rows):
-    cleaned = []
-
-    for r in rows:
-        try:
-            cleaned.append({
-                "strike": r["strikePrice"],
-                "ce_oi": r["CE"]["openInterest"],
-                "pe_oi": r["PE"]["openInterest"],
-                "ce_vol": r["CE"]["totalTradedVolume"],
-                "pe_vol": r["PE"]["totalTradedVolume"],
-            })
-        except:
-            continue
-
-    return cleaned
+# ----------------------------
+# ATM FINDER
+# ----------------------------
+def find_atm(chain):
+    spot = chain[0]["CE"]["underlyingValue"]
+    return min(chain, key=lambda x: abs(x["strikePrice"] - spot))["strikePrice"], spot
 
 
-# -----------------------------
-# FIND PEAKS
-# -----------------------------
-def find_peaks(rows):
-    ce_peak = max(rows, key=lambda x: x["ce_oi"])
-    pe_peak = max(rows, key=lambda x: x["pe_oi"])
+# ----------------------------
+# FILTER ZONE (ATM ± 5)
+# ----------------------------
+def filter_zone(chain, atm):
+    strikes = sorted([x["strikePrice"] for x in chain])
+    atm_index = strikes.index(atm)
 
-    return ce_peak, pe_peak
-
-
-# -----------------------------
-# SENTIMENT
-# -----------------------------
-def sentiment(ce_peak, pe_peak):
-    if ce_peak["ce_oi"] > pe_peak["pe_oi"] * 1.1:
-        return "BULLISH"
-    elif pe_peak["pe_oi"] > ce_peak["ce_oi"] * 1.1:
-        return "BEARISH"
-    return "RISKY"
+    zone = strikes[max(0, atm_index - 5): atm_index + 6]
+    return [x for x in chain if x["strikePrice"] in zone]
 
 
-# -----------------------------
-# RISKY STRIKES (YOUR RULE)
-# -----------------------------
-def risky_trades(ce_peak, pe_peak):
-    return {
-        "CE_BUY": {
-            "entry": ce_peak["strike"] - 10,
-            "sl": ce_peak["strike"] + 10
-        },
-        "PE_BUY": {
-            "entry": pe_peak["strike"] + 10,
-            "sl": pe_peak["strike"] - 10
-        }
-    }
-
-
-# -----------------------------
-# MAIN ENGINE
-# -----------------------------
+# ----------------------------
+# ENGINE
+# ----------------------------
 def run_engine():
-    raw_rows = load_data()
-    rows = normalize(raw_rows)
 
-    ce_peak, pe_peak = find_peaks(rows)
+    chain = load_data()
 
-    sent = sentiment(ce_peak, pe_peak)
+    atm, spot = find_atm(chain)
+    zone = filter_zone(chain, atm)
 
-    result = {
-        "ce_peak": ce_peak,
-        "pe_peak": pe_peak,
-        "sentiment": sent
-    }
+    # ----------------------------
+    # STEP 4: MAX BASE VALUES
+    # ----------------------------
+    x_oi = max(x["CE"]["openInterest"] for x in zone)
+    x_vol = max(x["CE"]["totalTradedVolume"] for x in zone)
 
-    # -----------------------------
-    # TRADE LOGIC
-    # -----------------------------
-    if sent == "RISKY":
-        result["trades"] = risky_trades(ce_peak, pe_peak)
+    y_oi = max(x["PE"]["openInterest"] for x in zone)
+    y_vol = max(x["PE"]["totalTradedVolume"] for x in zone)
 
-    elif sent == "BULLISH":
-        result["trades"] = {
+    # ----------------------------
+    # STEP 8: PEAKS
+    # ----------------------------
+    ce_peak = max(zone, key=lambda x: x["CE"]["openInterest"])
+    pe_peak = max(zone, key=lambda x: x["PE"]["openInterest"])
+
+    ce_peak_strike = ce_peak["strikePrice"]
+    pe_peak_strike = pe_peak["strikePrice"]
+
+    # ----------------------------
+    # STEP 9: SHRINK LOGIC (SINGLE RUN = NO HISTORY)
+    # ----------------------------
+    # Since no history yet → mark STABLE
+    ce_dir = "STABLE"
+    pe_dir = "STABLE"
+
+    # ----------------------------
+    # STEP 10: SENTIMENT
+    # ----------------------------
+    if ce_dir == "UP" and pe_dir == "UP":
+        sentiment = "BULLISH"
+    elif ce_dir == "DOWN" and pe_dir == "DOWN":
+        sentiment = "BEARISH"
+    else:
+        sentiment = "RISKY"
+
+    # ----------------------------
+    # STEP 12: TRADE ENGINE
+    # ----------------------------
+    trades = {}
+
+    ce = ce_peak_strike
+    pe = pe_peak_strike
+
+    if sentiment == "BULLISH":
+
+        support = pe + 15
+        support_sl = support - 10
+
+        resistance = ce - 10
+        resistance_sl = resistance + 10
+
+        trades = {
             "BUY": {
-                "entry": pe_peak["strike"] + 10,
-                "sl": pe_peak["strike"] - 10,
-                "target": ce_peak["strike"]
+                "entry": support,
+                "sl": support_sl,
+                "target_1": min([x["strikePrice"] for x in zone if x["strikePrice"] > support], default=ce),
+                "target_2": ce
+            },
+            "SELL": {
+                "entry": resistance,
+                "sl": resistance_sl,
+                "target_1": resistance - 15
             }
         }
 
-    elif sent == "BEARISH":
-        result["trades"] = {
+    elif sentiment == "BEARISH":
+
+        resistance = ce - 15
+        resistance_sl = resistance + 10
+
+        support = pe + 10
+        support_sl = support - 10
+
+        trades = {
             "SELL": {
-                "entry": ce_peak["strike"] - 10,
-                "sl": ce_peak["strike"] + 10,
-                "target": pe_peak["strike"]
+                "entry": resistance,
+                "sl": resistance_sl,
+                "target_1": min([x["strikePrice"] for x in zone if x["strikePrice"] < resistance], default=pe),
+                "target_2": pe
+            },
+            "BUY": {
+                "entry": support,
+                "sl": support_sl,
+                "target_1": support - 15
             }
         }
+
+    else:
+
+        trades = {
+            "BUY_PE_EXTREME": {
+                "entry": pe + 10,
+                "sl": pe - 10
+            },
+            "BUY_CE_EXTREME": {
+                "entry": ce - 10,
+                "sl": ce + 10
+            }
+        }
+
+    # ----------------------------
+    # OUTPUT
+    # ----------------------------
+    result = {
+        "spot": spot,
+        "atm": atm,
+        "ce_peak": {"strike": ce, "oi": ce_peak["CE"]["openInterest"]},
+        "pe_peak": {"strike": pe, "oi": pe_peak["PE"]["openInterest"]},
+        "sentiment": sentiment,
+        "trades": trades
+    }
 
     return result
 
 
-# -----------------------------
+# ----------------------------
 # RUN
-# -----------------------------
+# ----------------------------
 if __name__ == "__main__":
     output = run_engine()
+
+    with open("output/result.json", "w") as f:
+        json.dump(output, f, indent=2)
+
     print(json.dumps(output, indent=2))
