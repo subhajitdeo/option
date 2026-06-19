@@ -1,48 +1,19 @@
-name: Fetch data
+- name: Sync with latest remote
+  run: |
+    git fetch origin main
+    git reset --hard origin/main
 
-on:
-  push:
-    branches: ["main"]
-  workflow_dispatch:
+- name: Run bot
+  run: python main.py
 
-concurrency:
-  group: option-chain-update
-  cancel-in-progress: false
+- name: Commit and push data
+  run: |
+    git config user.name "github-actions"
+    git config user.email "actions@github.com"
 
-jobs:
-  run-bot:
-    runs-on: ubuntu-latest
+    git add data/nifty_option_chain.json
 
-    permissions:
-      contents: write
+    git diff --staged --quiet && exit 0
 
-    steps:
-      - name: Checkout repo
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.10"
-
-      - name: Install dependencies
-        run: pip install requests
-
-      - name: Run bot
-        run: python main.py
-
-      - name: Commit and push data
-        run: |
-          git config user.name "github-actions"
-          git config user.email "actions@github.com"
-
-          git add data/nifty_option_chain.json
-
-          git diff --staged --quiet && exit 0
-
-          git commit -m "update option chain data [skip ci]"
-
-          git pull --rebase origin main
-          git push origin main
+    git commit -m "update option chain data [skip ci]"
+    git push origin HEAD:main
