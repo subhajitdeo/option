@@ -1,136 +1,201 @@
 import json
-import os
 
-INPUT_FILE = "data/nifty_option_chain.json"
-OUTPUT_FILE = "output/result.json"
+# -----------------------------
+# 1. LOAD DATA
+# -----------------------------
+def load_data(path="nifty_option_chain.json"):
+    with open(path, "r") as f:
+        raw = json.load(f)
+
+    # your structure fix safety
+    if "data" in raw:
+        raw = raw["data"]
+
+    if "records" in raw:
+        raw = raw["records"]
+
+    if "records" in raw and "data" in raw["records"]:
+        raw = raw["records"]["data"]
+
+    return raw
 
 
-# ----------------------------
-# LOAD JSON SAFELY
-# ----------------------------
-def load_data():
-    with open(INPUT_FILE, "r") as f:
-        return json.load(f)
+# -----------------------------
+# 2. FIND ATM
+# -----------------------------
+def find_atm(data, spot):
+    return min(data, key=lambda x: abs(x["strikePrice"] - spot))["strikePrice"]
 
 
-# ----------------------------
-# FIND ATM STRIKE
-# ----------------------------
-def find_atm(strikes, spot):
-    return min(strikes, key=lambda x: abs(x - spot))
+# -----------------------------
+# 3. FILTER ZONE ±5
+# -----------------------------
+def filter_zone(data, atm):
+    zone = []
+    for d in data:
+        sp = d["strikePrice"]
+        if atm - 250 <= sp <= atm + 250:  # approx ±5 strikes (50pt each)
+            zone.append(d)
+    return zone
 
 
-# ----------------------------
-# MAIN ENGINE
-# ----------------------------
-def main():
-    data = load_data()
+# -----------------------------
+# 4. FIND PEAKS
+# -----------------------------
+def find_peaks(zone):
+    ce_peak = max(zone, key=lambda x: x["CE"]["openInterest"])
+    pe_peak = max(zone, key=lambda x: x["PE"]["openInterest"])
 
-    # ✅ FIXED PATH (your real structure)
-    chain = data["data"]["records"]["data"]
-
-    # Spot price
-    spot = chain[0]["CE"]["underlyingValue"]
-
-    strikes = [x["strikePrice"] for x in chain]
-
-    atm = find_atm(strikes, spot)
-
-    # ATM ± 5 STRIKES (safe range logic)
-    sorted_strikes = sorted(strikes)
-    atm_index = sorted_strikes.index(atm)
-
-    start = max(0, atm_index - 5)
-    end = min(len(sorted_strikes), atm_index + 6)
-
-    zone_strikes = sorted_strikes[start:end]
-
-    filtered = [x for x in chain if x["strikePrice"] in zone_strikes]
-
-    # ----------------------------
-    # BASE MAX VALUES (100%)
-    # ----------------------------
-    x_oi = max(x["CE"]["openInterest"] for x in filtered if x["CE"])
-    x_vol = max(x["CE"]["totalTradedVolume"] for x in filtered if x["CE"])
-
-    y_oi = max(x["PE"]["openInterest"] for x in filtered if x["PE"])
-    y_vol = max(x["PE"]["totalTradedVolume"] for x in filtered if x["PE"])
-
-    result = {
-        "spot": spot,
-        "atm": atm,
-        "zone_strikes": zone_strikes,
-        "data": []
+    return {
+        "ce_peak": {
+            "strike": ce_peak["strikePrice"],
+            "oi": ce_peak["CE"]["openInterest"]
+        },
+        "pe_peak": {
+            "strike": pe_peak["strikePrice"],
+            "oi": pe_peak["PE"]["openInterest"]
+        }
     }
 
-    ce_peak = {"strike": 0, "oi": 0}
-    pe_peak = {"strike": 0, "oi": 0}
 
-    # ----------------------------
-    # PROCESS EACH STRIKE
-    # ----------------------------
-    for item in filtered:
-        ce = item["CE"]
-        pe = item["PE"]
-        strike = item["strikePrice"]
+# -----------------------------
+# 5. SENTIMENT (BASIC VERSION)
+# -----------------------------
+def get_sentiment(ce_peak, pe_peak):
+    ce = ce_peak["strike"]
+    pe = pe_peak["strike"]
 
-        ce_oi = ce["openInterest"]
-        ce_vol = ce["totalTradedVolume"]
-
-        pe_oi = pe["openInterest"]
-        pe_vol = pe["totalTradedVolume"]
-
-        # RELATIVE %
-        ce_oi_pct = (ce_oi / x_oi * 100) if x_oi else 0
-        ce_vol_pct = (ce_vol / x_vol * 100) if x_vol else 0
-
-        pe_oi_pct = (pe_oi / y_oi * 100) if y_oi else 0
-        pe_vol_pct = (pe_vol / y_vol * 100) if y_vol else 0
-
-        oi_diff = ce_oi - pe_oi
-
-        # PEAK DETECTION
-        if ce_oi > ce_peak["oi"]:
-            ce_peak = {"strike": strike, "oi": ce_oi}
-
-        if pe_oi > pe_peak["oi"]:
-            pe_peak = {"strike": strike, "oi": pe_oi}
-
-        result["data"].append({
-            "strike": strike,
-
-            "ce_oi": ce_oi,
-            "ce_oi_pct": round(ce_oi_pct, 2),
-            "ce_vol": ce_vol,
-            "ce_vol_pct": round(ce_vol_pct, 2),
-
-            "pe_oi": pe_oi,
-            "pe_oi_pct": round(pe_oi_pct, 2),
-            "pe_vol": pe_vol,
-            "pe_vol_pct": round(pe_vol_pct, 2),
-
-            "oi_diff": oi_diff,
-
-            "strong_ce": ce_oi_pct >= 75,
-            "strong_pe": pe_oi_pct >= 75
-        })
-
-    # ----------------------------
-    # FINAL OUTPUT
-    # ----------------------------
-    result["ce_peak"] = ce_peak
-    result["pe_peak"] = pe_peak
-
-    os.makedirs("output", exist_ok=True)
-
-    with open(OUTPUT_FILE, "w") as f:
-        json.dump(result, f, indent=2)
-
-    print("✅ ENGINE RUN SUCCESSFUL")
-    print("ATM:", atm)
-    print("CE PEAK:", ce_peak)
-    print("PE PEAK:", pe_peak)
+    if ce == pe:
+        return "RISKY"
+    elif ce < pe:
+        return "BULLISH"
+    else:
+        return "BEARISH"
 
 
+# -----------------------------
+# 6. RISKY MODE ENGINE
+# -----------------------------
+def risky_engine(ce_peak, pe_peak):
+    ce = ce_peak["strike"]
+    pe = pe_peak["strike"]
+
+    return {
+        "sentiment": "RISKY",
+
+        "pe_trade": {
+            "type": "BUY_PE",
+            "entry": pe + 10,
+            "sl": pe - 10,
+            "target_1": pe - 5,
+            "target_2": "exit on reversal"
+        },
+
+        "ce_trade": {
+            "type": "SELL_CE",
+            "entry": ce - 10,
+            "sl": ce + 10,
+            "target_1": ce + 5,
+            "target_2": "exit on reversal"
+        }
+    }
+
+
+# -----------------------------
+# 7. BULLISH ENGINE
+# -----------------------------
+def bullish_engine(ce_peak, pe_peak):
+    support = pe_peak["strike"] + 15
+    resistance = ce_peak["strike"] - 10
+
+    return {
+        "sentiment": "BULLISH",
+
+        "support": {
+            "level": support,
+            "sl": support - 10
+        },
+
+        "resistance": {
+            "level": resistance,
+            "sl": resistance + 10
+        },
+
+        "buy_ce": {
+            "entry": resistance,
+            "target_1": resistance + 5,
+            "target_2": ce_peak["strike"]
+        }
+    }
+
+
+# -----------------------------
+# 8. BEARISH ENGINE
+# -----------------------------
+def bearish_engine(ce_peak, pe_peak):
+    resistance = ce_peak["strike"] - 15
+    support = pe_peak["strike"] + 10
+
+    return {
+        "sentiment": "BEARISH",
+
+        "resistance": {
+            "level": resistance,
+            "sl": resistance + 10
+        },
+
+        "support": {
+            "level": support,
+            "sl": support - 10
+        },
+
+        "sell_ce": {
+            "entry": resistance,
+            "target_1": resistance - 5,
+            "target_2": pe_peak["strike"]
+        }
+    }
+
+
+# -----------------------------
+# 9. MAIN ENGINE
+# -----------------------------
+def run_engine(data, spot):
+    atm = find_atm(data, spot)
+    zone = filter_zone(data, atm)
+    peaks = find_peaks(zone)
+
+    ce_peak = peaks["ce_peak"]
+    pe_peak = peaks["pe_peak"]
+
+    sentiment = get_sentiment(ce_peak, pe_peak)
+
+    if sentiment == "RISKY":
+        trade = risky_engine(ce_peak, pe_peak)
+
+    elif sentiment == "BULLISH":
+        trade = bullish_engine(ce_peak, pe_peak)
+
+    else:
+        trade = bearish_engine(ce_peak, pe_peak)
+
+    return {
+        "spot": spot,
+        "atm": atm,
+        "ce_peak": ce_peak,
+        "pe_peak": pe_peak,
+        "sentiment": sentiment,
+        "trade_plan": trade
+    }
+
+
+# -----------------------------
+# 10. RUN
+# -----------------------------
 if __name__ == "__main__":
-    main()
+    data = load_data("data/nifty_option_chain.json")
+    spot = data[0]["CE"]["underlyingValue"]  # auto spot
+
+    result = run_engine(data, spot)
+
+    print(json.dumps(result, indent=2))
