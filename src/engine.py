@@ -1,23 +1,14 @@
 import json
 
 # -----------------------------
-# 1. LOAD DATA
+# 1. LOAD DATA (OLD FORMAT)
 # -----------------------------
-def load_data(path="nifty_option_chain.json"):
+def load_data(path="data/nifty_option_chain.json"):
     with open(path, "r") as f:
         raw = json.load(f)
 
-    # your structure fix safety
-    if "data" in raw:
-        raw = raw["data"]
-
-    if "records" in raw:
-        raw = raw["records"]
-
-    if "records" in raw and "data" in raw["records"]:
-        raw = raw["records"]["data"]
-
-    return raw
+    # OLD EXPECTED STRUCTURE
+    return raw["records"]["data"]
 
 
 # -----------------------------
@@ -28,15 +19,13 @@ def find_atm(data, spot):
 
 
 # -----------------------------
-# 3. FILTER ZONE ±5
+# 3. FILTER ZONE ±5 STRIKES (50 POINT STEP)
 # -----------------------------
 def filter_zone(data, atm):
-    zone = []
-    for d in data:
-        sp = d["strikePrice"]
-        if atm - 250 <= sp <= atm + 250:  # approx ±5 strikes (50pt each)
-            zone.append(d)
-    return zone
+    return [
+        d for d in data
+        if atm - 250 <= d["strikePrice"] <= atm + 250
+    ]
 
 
 # -----------------------------
@@ -59,7 +48,7 @@ def find_peaks(zone):
 
 
 # -----------------------------
-# 5. SENTIMENT (BASIC VERSION)
+# 5. SENTIMENT (BASIC)
 # -----------------------------
 def get_sentiment(ce_peak, pe_peak):
     ce = ce_peak["strike"]
@@ -74,7 +63,7 @@ def get_sentiment(ce_peak, pe_peak):
 
 
 # -----------------------------
-# 6. RISKY MODE ENGINE
+# 6. RISKY MODE (YOUR RULE)
 # -----------------------------
 def risky_engine(ce_peak, pe_peak):
     ce = ce_peak["strike"]
@@ -88,7 +77,7 @@ def risky_engine(ce_peak, pe_peak):
             "entry": pe + 10,
             "sl": pe - 10,
             "target_1": pe - 5,
-            "target_2": "exit on reversal"
+            "target_2": "exit_manual"
         },
 
         "ce_trade": {
@@ -96,13 +85,13 @@ def risky_engine(ce_peak, pe_peak):
             "entry": ce - 10,
             "sl": ce + 10,
             "target_1": ce + 5,
-            "target_2": "exit on reversal"
+            "target_2": "exit_manual"
         }
     }
 
 
 # -----------------------------
-# 7. BULLISH ENGINE
+# 7. BULLISH MODE
 # -----------------------------
 def bullish_engine(ce_peak, pe_peak):
     support = pe_peak["strike"] + 15
@@ -110,17 +99,14 @@ def bullish_engine(ce_peak, pe_peak):
 
     return {
         "sentiment": "BULLISH",
-
         "support": {
             "level": support,
             "sl": support - 10
         },
-
         "resistance": {
             "level": resistance,
             "sl": resistance + 10
         },
-
         "buy_ce": {
             "entry": resistance,
             "target_1": resistance + 5,
@@ -130,7 +116,7 @@ def bullish_engine(ce_peak, pe_peak):
 
 
 # -----------------------------
-# 8. BEARISH ENGINE
+# 8. BEARISH MODE
 # -----------------------------
 def bearish_engine(ce_peak, pe_peak):
     resistance = ce_peak["strike"] - 15
@@ -138,17 +124,14 @@ def bearish_engine(ce_peak, pe_peak):
 
     return {
         "sentiment": "BEARISH",
-
         "resistance": {
             "level": resistance,
             "sl": resistance + 10
         },
-
         "support": {
             "level": support,
             "sl": support - 10
         },
-
         "sell_ce": {
             "entry": resistance,
             "target_1": resistance - 5,
@@ -160,7 +143,11 @@ def bearish_engine(ce_peak, pe_peak):
 # -----------------------------
 # 9. MAIN ENGINE
 # -----------------------------
-def run_engine(data, spot):
+def run_engine():
+    data = load_data()
+
+    spot = data[0]["CE"]["underlyingValue"]
+
     atm = find_atm(data, spot)
     zone = filter_zone(data, atm)
     peaks = find_peaks(zone)
@@ -172,10 +159,8 @@ def run_engine(data, spot):
 
     if sentiment == "RISKY":
         trade = risky_engine(ce_peak, pe_peak)
-
     elif sentiment == "BULLISH":
         trade = bullish_engine(ce_peak, pe_peak)
-
     else:
         trade = bearish_engine(ce_peak, pe_peak)
 
@@ -193,9 +178,5 @@ def run_engine(data, spot):
 # 10. RUN
 # -----------------------------
 if __name__ == "__main__":
-    data = load_data("data/nifty_option_chain.json")
-    spot = data[0]["CE"]["underlyingValue"]  # auto spot
-
-    result = run_engine(data, spot)
-
+    result = run_engine()
     print(json.dumps(result, indent=2))
