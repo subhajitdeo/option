@@ -1,4 +1,4 @@
-name: NSE Option Chain Bot
+name: Fetch data
 
 on:
   push:
