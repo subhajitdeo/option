@@ -2,8 +2,12 @@ name: Fetch data
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
   workflow_dispatch:
+
+concurrency:
+  group: option-chain-update
+  cancel-in-progress: false
 
 jobs:
   run-bot:
@@ -15,6 +19,8 @@ jobs:
     steps:
       - name: Checkout repo
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -34,6 +40,9 @@ jobs:
 
           git add data/nifty_option_chain.json
 
-          git commit -m "update option chain data" || echo "No changes to commit"
+          git diff --staged --quiet && exit 0
 
-          git push
+          git commit -m "update option chain data [skip ci]"
+
+          git pull --rebase origin main
+          git push origin main
