@@ -1,182 +1,128 @@
 import json
 
+FILE_PATH = "data/nifty_option_chain.json"
+
+
 # -----------------------------
-# 1. LOAD DATA (OLD FORMAT)
+# SAFE DATA LOADER (FIX YOUR ERROR)
 # -----------------------------
-def load_data(path="data/nifty_option_chain.json"):
-    with open(path, "r") as f:
+def load_data():
+    with open(FILE_PATH, "r") as f:
         raw = json.load(f)
 
-    # OLD EXPECTED STRUCTURE
-    return raw["records"]["data"]
+    # Case 1: wrapped inside "data"
+    if "data" in raw:
+        raw = raw["data"]
+
+    # Case 2: wrapped inside "records"
+    if isinstance(raw, dict) and "records" in raw:
+        raw = raw["records"]
+
+    # Case 3: final extraction
+    if isinstance(raw, dict) and "data" in raw:
+        return raw["data"]
+
+    # Case 4: already list
+    if isinstance(raw, list):
+        return raw
+
+    raise Exception("Unknown JSON structure")
 
 
 # -----------------------------
-# 2. FIND ATM
+# SENTIMENT DETECTION (SIMPLE)
 # -----------------------------
-def find_atm(data, spot):
-    return min(data, key=lambda x: abs(x["strikePrice"] - spot))["strikePrice"]
+def detect_sentiment(ce_peak, pe_peak):
+    ce = ce_peak["oi"]
+    pe = pe_peak["oi"]
 
-
-# -----------------------------
-# 3. FILTER ZONE ±5 STRIKES (50 POINT STEP)
-# -----------------------------
-def filter_zone(data, atm):
-    return [
-        d for d in data
-        if atm - 250 <= d["strikePrice"] <= atm + 250
-    ]
-
-
-# -----------------------------
-# 4. FIND PEAKS
-# -----------------------------
-def find_peaks(zone):
-    ce_peak = max(zone, key=lambda x: x["CE"]["openInterest"])
-    pe_peak = max(zone, key=lambda x: x["PE"]["openInterest"])
-
-    return {
-        "ce_peak": {
-            "strike": ce_peak["strikePrice"],
-            "oi": ce_peak["CE"]["openInterest"]
-        },
-        "pe_peak": {
-            "strike": pe_peak["strikePrice"],
-            "oi": pe_peak["PE"]["openInterest"]
-        }
-    }
-
-
-# -----------------------------
-# 5. SENTIMENT (BASIC)
-# -----------------------------
-def get_sentiment(ce_peak, pe_peak):
-    ce = ce_peak["strike"]
-    pe = pe_peak["strike"]
-
-    if ce == pe:
-        return "RISKY"
-    elif ce < pe:
+    if ce > pe * 1.1:
         return "BULLISH"
-    else:
+    elif pe > ce * 1.1:
         return "BEARISH"
+    else:
+        return "RISKY"
 
 
 # -----------------------------
-# 6. RISKY MODE (YOUR RULE)
+# FIND PEAKS
 # -----------------------------
-def risky_engine(ce_peak, pe_peak):
-    ce = ce_peak["strike"]
-    pe = pe_peak["strike"]
+def find_peaks(rows):
+    ce_peak = max(rows, key=lambda x: x["ce_oi"])
+    pe_peak = max(rows, key=lambda x: x["pe_oi"])
 
     return {
-        "sentiment": "RISKY",
-
-        "pe_trade": {
-            "type": "BUY_PE",
-            "entry": pe + 10,
-            "sl": pe - 10,
-            "target_1": pe - 5,
-            "target_2": "exit_manual"
-        },
-
-        "ce_trade": {
-            "type": "SELL_CE",
-            "entry": ce - 10,
-            "sl": ce + 10,
-            "target_1": ce + 5,
-            "target_2": "exit_manual"
-        }
+        "ce": {"strike": ce_peak["strike"], "oi": ce_peak["ce_oi"]},
+        "pe": {"strike": pe_peak["strike"], "oi": pe_peak["pe_oi"]},
     }
 
 
 # -----------------------------
-# 7. BULLISH MODE
+# EXTREME STRIKE LOGIC (YOUR RULE)
 # -----------------------------
-def bullish_engine(ce_peak, pe_peak):
-    support = pe_peak["strike"] + 15
-    resistance = ce_peak["strike"] - 10
-
+def risky_trades(pe_peak, ce_peak):
     return {
-        "sentiment": "BULLISH",
-        "support": {
-            "level": support,
-            "sl": support - 10
+        "PE_BUY": {
+            "entry": pe_peak["strike"] + 10,
+            "sl": pe_peak["strike"] - 10,
         },
-        "resistance": {
-            "level": resistance,
-            "sl": resistance + 10
+        "CE_BUY": {
+            "entry": ce_peak["strike"] - 10,
+            "sl": ce_peak["strike"] + 10,
         },
-        "buy_ce": {
-            "entry": resistance,
-            "target_1": resistance + 5,
-            "target_2": ce_peak["strike"]
-        }
     }
 
 
 # -----------------------------
-# 8. BEARISH MODE
-# -----------------------------
-def bearish_engine(ce_peak, pe_peak):
-    resistance = ce_peak["strike"] - 15
-    support = pe_peak["strike"] + 10
-
-    return {
-        "sentiment": "BEARISH",
-        "resistance": {
-            "level": resistance,
-            "sl": resistance + 10
-        },
-        "support": {
-            "level": support,
-            "sl": support - 10
-        },
-        "sell_ce": {
-            "entry": resistance,
-            "target_1": resistance - 5,
-            "target_2": pe_peak["strike"]
-        }
-    }
-
-
-# -----------------------------
-# 9. MAIN ENGINE
+# MAIN ENGINE
 # -----------------------------
 def run_engine():
-    data = load_data()
+    rows = load_data()
 
-    spot = data[0]["CE"]["underlyingValue"]
+    peaks = find_peaks(rows)
+    ce_peak = peaks["ce"]
+    pe_peak = peaks["pe"]
 
-    atm = find_atm(data, spot)
-    zone = filter_zone(data, atm)
-    peaks = find_peaks(zone)
+    sentiment = detect_sentiment(ce_peak, pe_peak)
 
-    ce_peak = peaks["ce_peak"]
-    pe_peak = peaks["pe_peak"]
-
-    sentiment = get_sentiment(ce_peak, pe_peak)
-
-    if sentiment == "RISKY":
-        trade = risky_engine(ce_peak, pe_peak)
-    elif sentiment == "BULLISH":
-        trade = bullish_engine(ce_peak, pe_peak)
-    else:
-        trade = bearish_engine(ce_peak, pe_peak)
-
-    return {
-        "spot": spot,
-        "atm": atm,
+    result = {
         "ce_peak": ce_peak,
         "pe_peak": pe_peak,
         "sentiment": sentiment,
-        "trade_plan": trade
     }
 
+    # -----------------------------
+    # TRADE LOGIC
+    # -----------------------------
+    if sentiment == "RISKY":
+        result["trades"] = risky_trades(pe_peak, ce_peak)
+
+    else:
+        # simple directional structure (you can extend later)
+        if sentiment == "BULLISH":
+            result["trades"] = {
+                "BUY": {
+                    "entry": pe_peak["strike"] + 10,
+                    "sl": pe_peak["strike"] - 10,
+                    "target": ce_peak["strike"],
+                }
+            }
+
+        elif sentiment == "BEARISH":
+            result["trades"] = {
+                "SELL": {
+                    "entry": ce_peak["strike"] - 10,
+                    "sl": ce_peak["strike"] + 10,
+                    "target": pe_peak["strike"],
+                }
+            }
+
+    return result
+
 
 # -----------------------------
-# 10. RUN
+# RUN
 # -----------------------------
 if __name__ == "__main__":
-    result = run_engine()
-    print(json.dumps(result, indent=2))
+    output = run_engine()
+    print(json.dumps(output, indent=2))
